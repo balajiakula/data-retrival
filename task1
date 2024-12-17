@@ -1,0 +1,142 @@
+pip install pdfplumber fuzzywuzzy python-Levenshtein requests beautifulsoup4
+import pdfplumber
+import re
+from fuzzywuzzy import fuzz
+from fuzzywuzzy import process
+import requests
+from bs4 import BeautifulSoup
+from google.colab import files
+
+
+def upload_file():
+    """Allows the user to upload a PDF file."""
+    print("Upload your PDF file:")
+    uploaded = files.upload()
+    if not uploaded:
+        raise FileNotFoundError("No file uploaded.")
+    return list(uploaded.keys())[0]
+
+
+def fetch_website_data(url):
+    """
+    Fetches and processes website content from the given URL.
+    """
+    try:
+        print("Fetching website data...")
+        response = requests.get(url)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        text = soup.get_text(separator='\n').strip()
+        return text
+    except Exception as e:
+        raise RuntimeError(f"Failed to fetch website data: {e}")
+
+
+class DataExtractor:
+    def __init__(self):
+        self.text_data = ""
+        self.tables = []
+
+    def extract_pdf_content(self, file_path):
+        """
+        Extracts text and tables from a PDF file using pdfplumber.
+        """
+        try:
+            print("Extracting PDF data...")
+            with pdfplumber.open(file_path) as pdf:
+                for page_number, page in enumerate(pdf.pages, start=1):
+                    text = page.extract_text()
+                    if text:
+                        self.text_data += f"--- Page {page_number} ---\n{text}\n"
+
+                    # Extract tables
+                    tables_on_page = page.extract_tables()
+                    if tables_on_page:
+                        self.tables.append((page_number, tables_on_page))
+        except Exception as e:
+            raise RuntimeError(f"Error processing PDF: {e}")
+
+    def display_tables(self):
+        """
+        Displays all extracted tables for user understanding.
+        """
+        if not self.tables:
+            print("No tables were extracted from the PDF.")
+            return
+
+        print("\nExtracted Tables:")
+        for pg_num, tables in self.tables:
+            print(f"\n--- Tables on Page {pg_num} ---")
+            for table in tables:
+                for row in table:
+                    print("\t".join(str(cell) if cell else "" for cell in row))
+                print("\n")  # Blank line after each table
+
+    def search_query(self, query):
+        """
+        Searches for close matches of the query in both text data and tables.
+        """
+        results = []
+
+        # Search in text data
+        lines = self.text_data.split("\n")
+        for line in lines:
+            if fuzz.partial_ratio(query.lower(), line.lower()) > 85:  # Threshold for good matches
+                results.append(line.strip())
+
+        # Search in tables
+        for _, tables in self.tables:
+            for table in tables:
+                for row in table:
+                    row_text = " ".join(str(cell) if cell else "" for cell in row)
+                    if fuzz.partial_ratio(query.lower(), row_text.lower()) > 85:
+                        results.append(row_text)
+
+        # Filter duplicates and return
+        return list(set(results))  # Removes duplicate results
+
+
+def main():
+    try:
+        # User input: PDF or Website
+        print("Choose an option:\n1. Upload PDF\n2. Enter Website URL")
+        choice = input("Enter 1 or 2: ").strip()
+
+        extractor = DataExtractor()
+
+        if choice == "1":
+            # PDF file handling
+            file_path = upload_file()
+            extractor.extract_pdf_content(file_path)
+
+            # Display extracted tables if any
+            extractor.display_tables()
+
+        elif choice == "2":
+            # Website URL handling
+            url = input("Enter the website URL: ").strip()
+            extractor.text_data = fetch_website_data(url)
+        else:
+            print("Invalid choice. Please enter 1 or 2.")
+            return
+
+        # Query input
+        print("\nEnter your query:")
+        query = input().strip()
+
+        # Search for matches
+        results = extractor.search_query(query)
+
+        # Display results
+        print("\nOutput:")
+        if results:
+            for result in results:
+                print(result)
+        else:
+            print("No close match found for the query. Try rephrasing it or checking the data.")
+
+    except Exception as e:
+        print(f"Error: {e}")
+
+
+if __name__ == "__main__":
+    main()
